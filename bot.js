@@ -102,12 +102,12 @@ async function handleUserApproval(ctx, user, chat) {
 // Envoi message de bienvenue
 async function sendWelcomeMessage(ctx, user) {
   try {
-    const caption = `*${escapeMarkdown(user.first_name)}*, félicitations ! Vous êtes sur le point de rejoindre un groupe d'élite réservé aux personnes ambitieuses et prêtes à réussir 💎
+const caption = `*${escapeMarkdown(user.first_name)}*, félicitations \\! Vous êtes sur le point de rejoindre un groupe d'élite réservé aux personnes ambitieuses et prêtes à réussir 💎
 
+⚠️ *Action Requise* : Confirmez votre présence en rejoignant nos canaux pour finaliser votre adhésion et accéder à notre communauté privée\\.
+⏳ Vous avez 10 minutes pour valider votre place exclusive dans le Club des Millionnaires\\.
+🚫 Après ce délai, votre demande sera annulée et votre place sera offerte à quelqu'un d'autre\\.`;
 
-⚠️ *Action Requise* : Confirmez votre présence en rejoignant nos canaux pour finaliser votre adhésion et accéder à notre communauté privée.
-⏳ Vous avez 10 minutes pour valider votre place exclusive dans le Club des Millionnaires.
-🚫 Après ce délai, votre demande sera annulée et votre place sera offerte à quelqu'un d'autre.`;
 
     await ctx.telegram.sendVideo(user.id, VIDEO_URL, {
       caption: caption,
