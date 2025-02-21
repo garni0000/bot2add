@@ -4,7 +4,7 @@ const { MongoClient } = require('mongodb');
 const fs = require('fs');
 const express = require('express');
 const ADMINS = process.env.ADMINS ? process.env.ADMINS.split(',') : [];
-
+const http = require('http');
 
 // Configuration Express (pour Render)
 const app = express();
@@ -233,3 +233,13 @@ bot.command('send', async (ctx) => {
 📨 Envoyés avec succès: ${success}
 ❌ Échecs: ${errors}`);
 });
+
+
+
+
+const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.write("I'm alive");
+    res.end();
+});
+server.listen(8080, () => { console.log("🌍 Server running on port 8080"); });
