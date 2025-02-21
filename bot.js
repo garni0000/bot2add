@@ -44,8 +44,7 @@ bot.on('chat_join_request', async (ctx) => {
   const { from: user, chat } = ctx.update.chat_join_request;
 
   try {
-    // Acceptation immédiate
-    await ctx.approveChatJoinRequest(user.id);
+  
 
     // Sauvegarde dans MongoDB
     const userData = {
