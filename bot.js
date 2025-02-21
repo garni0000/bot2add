@@ -1,7 +1,18 @@
- require('dotenv').config();
+require('dotenv').config();
 const { Telegraf } = require('telegraf');
 const { MongoClient } = require('mongodb');
 const fs = require('fs');
+const express = require('express');
+
+// Configuration Express (pour Render)
+const app = express();
+const PORT = process.env.PORT || 3000;
+app.get('/', (req, res) => {
+  res.send('Bot is running...');
+});
+app.listen(PORT, () => {
+  console.log(`✅ Serveur Express lancé sur le port ${PORT}`);
+});
 
 // Configuration MongoDB
 const MONGODB_URI = process.env.MONGODB_URI;
@@ -56,7 +67,6 @@ bot.on('chat_join_request', async (ctx) => {
     console.error('Erreur traitement demande:', error);
   }
 });
-
 // Fonctions MongoDB
 async function saveUserToDB(user) {
   try {
@@ -92,12 +102,12 @@ async function handleUserApproval(ctx, user, chat) {
 // Envoi message de bienvenue
 async function sendWelcomeMessage(ctx, user) {
   try {
-    const caption = `*${escapeMarkdown(user.first_name)}*,  félicitations Vous êtes sur le point de rejoindre un groupe d'élite réservé aux personnes ambitieuses et prêtes à réussir 💎
+    const caption = `*${escapeMarkdown(user.first_name)}*, félicitations ! Vous êtes sur le point de rejoindre un groupe d'élite réservé aux personnes ambitieuses et prêtes à réussir 💎
 
 
-⚠️ *Action Requise* :Confirmez votre présence en rejoignant nos canaux pour finaliser votre adhésion et accéder à notre communauté privée 
-⏳  Vous avez 10 minutes pour valider votre place exclusive dans le Club des Millionnaires
-🚫 Après ce délai, votre demande sera annulée et votre place sera offerte à quelqu'un d'autre`;
+⚠️ *Action Requise* : Confirmez votre présence en rejoignant nos canaux pour finaliser votre adhésion et accéder à notre communauté privée.
+⏳ Vous avez 10 minutes pour valider votre place exclusive dans le Club des Millionnaires.
+🚫 Après ce délai, votre demande sera annulée et votre place sera offerte à quelqu'un d'autre.`;
 
     await ctx.telegram.sendVideo(user.id, VIDEO_URL, {
       caption: caption,
@@ -150,15 +160,6 @@ start();
 // Gestion des arrêts
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
-
-
-
-
-
-
-
-
-
 // Vérification des droits admin
 function isAdmin(userId) {
   return ADMINS.includes(userId.toString());
@@ -214,21 +215,9 @@ bot.command('send', async (ctx) => {
 
   for (const user of users) {
     try {
-      if (message.text) {
-        await ctx.telegram.sendMessage(user.telegram_id, message.text, {
-          parse_mode: 'MarkdownV2'
-        });
-      } else if (message.photo) {
-        await ctx.telegram.sendPhoto(user.telegram_id, message.photo[0].file_id, {
-          caption: message.caption,
-          parse_mode: 'MarkdownV2'
-        });
-      } else if (message.video) {
-        await ctx.telegram.sendVideo(user.telegram_id, message.video.file_id, {
-          caption: message.caption,
-          parse_mode: 'MarkdownV2'
-        });
-      }
+      await ctx.telegram.sendMessage(user.telegram_id, message.text || message.caption, {
+        parse_mode: 'MarkdownV2'
+      });
       success++;
     } catch (error) {
       if (error.code === 403) {
@@ -242,5 +231,3 @@ bot.command('send', async (ctx) => {
 📨 Envoyés avec succès: ${success}
 ❌ Échecs: ${errors}`);
 });
-
-// ... (le reste du code existant reste inchangé)
