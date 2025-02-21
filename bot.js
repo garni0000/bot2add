@@ -3,6 +3,8 @@ const { Telegraf } = require('telegraf');
 const { MongoClient } = require('mongodb');
 const fs = require('fs');
 const express = require('express');
+const ADMINS = process.env.ADMINS ? process.env.ADMINS.split(',') : [];
+
 
 // Configuration Express (pour Render)
 const app = express();
