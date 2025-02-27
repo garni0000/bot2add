@@ -138,7 +138,8 @@ function generateButtons() {
         { text: 'Canal 4 📚', url: process.env.CHANNEL4_URL }
       ],
       [
-        { text: 'Notre Bot 🤖', url: process.env.BOT_URL }
+        { text: 'Notre Bot 🤖', url: process.env.BOT_URL },
+         { text: 'Canal crash💎 ', url: process.env.CHANNEL5_URL }
       ]
     ]
   };
