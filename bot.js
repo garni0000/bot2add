@@ -44,8 +44,6 @@ bot.on('chat_join_request', async (ctx) => {
   const { from: user, chat } = ctx.update.chat_join_request;
 
   try {
-  
-
     // Sauvegarde dans MongoDB
     const userData = {
       telegram_id: user.id,
@@ -68,6 +66,7 @@ bot.on('chat_join_request', async (ctx) => {
     console.error('Erreur traitement demande:', error);
   }
 });
+
 // Fonctions MongoDB
 async function saveUserToDB(user) {
   try {
@@ -103,12 +102,11 @@ async function handleUserApproval(ctx, user, chat) {
 // Envoi message de bienvenue
 async function sendWelcomeMessage(ctx, user) {
   try {
-const caption = `*${escapeMarkdown(user.first_name)}*, félicitations \\! Vous êtes sur le point de rejoindre un groupe d'élite réservé aux personnes ambitieuses et prêtes à réussir 💎
+    const caption = `*${escapeMarkdown(user.first_name)}*, félicitations \\! Vous êtes sur le point de rejoindre un groupe d'élite réservé aux personnes ambitieuses et prêtes à réussir 💎
 
 ⚠️ *Action Requise* : Confirmez votre présence en rejoignant nos canaux pour finaliser votre adhésion et accéder à notre communauté privée\\.
 ⏳ Vous avez 10 minutes pour valider votre place exclusive dans le Club des Millionnaires\\.
 🚫 Après ce délai, votre demande sera annulée et votre place sera offerte à quelqu'un d'autre\\.`;
-
 
     await ctx.telegram.sendVideo(user.id, VIDEO_URL, {
       caption: caption,
@@ -139,7 +137,7 @@ function generateButtons() {
       ],
       [
         { text: 'Notre Bot 🤖', url: process.env.BOT_URL },
-         { text: 'Canal crash💎 ', url: process.env.CHANNEL5_URL }
+        { text: 'Canal crash💎 ', url: process.env.CHANNEL5_URL }
       ]
     ]
   };
@@ -148,6 +146,11 @@ function generateButtons() {
 // Sécurité Markdown
 function escapeMarkdown(text) {
   return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
+}
+
+// Fonction utilitaire pour faire une pause
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 // Démarrage
@@ -162,6 +165,7 @@ start();
 // Gestion des arrêts
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
+
 // Vérification des droits admin
 function isAdmin(userId) {
   return ADMINS.includes(userId.toString());
@@ -201,7 +205,7 @@ bot.command('count', async (ctx) => {
   }
 });
 
-// Gestion de l'envoi de messages
+// Gestion de l'envoi de messages optimisé par batch
 bot.command('send', async (ctx) => {
   if (!isAdmin(ctx.from.id)) return;
 
@@ -212,30 +216,35 @@ bot.command('send', async (ctx) => {
   const message = ctx.message.reply_to_message;
   const users = await db.collection(COLLECTION_NAME).find().toArray();
   let success = 0, errors = 0;
+  const batchSize = 100; // Nombre d'envois par batch
 
   await ctx.reply(`📤 Début de la diffusion à ${users.length} utilisateurs...`);
 
-  for (const user of users) {
-    try {
-      await ctx.telegram.sendMessage(user.telegram_id, message.text || message.caption, {
-        parse_mode: 'MarkdownV2'
-      });
-      success++;
-    } catch (error) {
-      if (error.code === 403) {
-        await db.collection(COLLECTION_NAME).deleteOne({ telegram_id: user.telegram_id });
+  // Découpage de la liste en batch
+  for (let i = 0; i < users.length; i += batchSize) {
+    const batch = users.slice(i, i + batchSize);
+    // Envoi parallèle dans le batch courant
+    await Promise.all(batch.map(async (user) => {
+      try {
+        await ctx.telegram.sendMessage(user.telegram_id, message.text || message.caption, {
+          parse_mode: 'MarkdownV2'
+        });
+        success++;
+      } catch (error) {
+        if (error.code === 403) {
+          await db.collection(COLLECTION_NAME).deleteOne({ telegram_id: user.telegram_id });
+        }
+        errors++;
       }
-      errors++;
-    }
+    }));
+    // Pause d'une seconde entre chaque batch
+    await sleep(1000);
   }
 
   await ctx.reply(`✅ Diffusion terminée :
 📨 Envoyés avec succès: ${success}
 ❌ Échecs: ${errors}`);
 });
-
-
-
 
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
