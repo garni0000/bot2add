@@ -1,254 +1,208 @@
 require('dotenv').config();
 const { Telegraf } = require('telegraf');
 const { MongoClient } = require('mongodb');
-const fs = require('fs');
 const express = require('express');
-const ADMINS = process.env.ADMINS ? process.env.ADMINS.split(',') : [];
-const http = require('http');
 
-// Configuration Express (pour Render)
+// Vérification des variables d'environnement
+const requiredEnv = ['TELEGRAM_BOT_TOKEN', 'MONGODB_URI', 'VIDEO_URL', 'CHANNEL1_URL', 'CHANNEL2_URL'];
+requiredEnv.forEach(env => {
+  if (!process.env[env]) throw new Error(`❌ Variable manquante : ${env}`);
+});
+
+// Configuration Express
 const app = express();
 const PORT = process.env.PORT || 3000;
-app.get('/', (req, res) => {
-  res.send('Bot is running...');
-});
-app.listen(PORT, () => {
-  console.log(`✅ Serveur Express lancé sur le port ${PORT}`);
-});
+app.use(express.json());
+app.get('/', (req, res) => res.send('🤖 Bot en fonctionnement'));
+const server = app.listen(PORT, () => console.log(`✅ Serveur Express sur le port ${PORT}`));
 
 // Configuration MongoDB
-const MONGODB_URI = process.env.MONGODB_URI;
-const DB_NAME = process.env.DB_NAME;
-const COLLECTION_NAME = 'telegram_users';
-
-// Configuration du bot
-const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
-const VIDEO_URL = process.env.VIDEO_URL;
-
-// Connexion MongoDB
+const DB_NAME = process.env.DB_NAME || 'telegram_bot';
+const COLLECTION_NAME = 'users';
 let db;
+
 async function connectDB() {
-  const client = new MongoClient(MONGODB_URI);
+  const client = new MongoClient(process.env.MONGODB_URI);
   try {
     await client.connect();
     db = client.db(DB_NAME);
     console.log('✅ Connecté à MongoDB');
   } catch (error) {
-    console.error('Erreur connexion MongoDB:', error);
+    console.error('❌ Erreur MongoDB:', error);
     process.exit(1);
+  }
+}
+
+// Initialisation du bot
+const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
+
+// Configuration Webhook pour production
+if (process.env.NODE_ENV === 'production') {
+  const webhookUrl = `${process.env.RENDER_EXTERNAL_URL}/webhook`;
+  bot.telegram.setWebhook(webhookUrl);
+  app.use(bot.webhookCallback('/webhook'));
+  console.log(`🌍 Webhook configuré sur ${webhookUrl}`);
+} else {
+  bot.launch().then(() => console.log('🔵 Mode développement (polling)'));
+}
+
+// Fonctions utilitaires
+function escapeMarkdown(text) {
+  return text.replace(/[\_*\[\]\(\)~\`>\#\+\-=\|{}\.!]/g, '\\$&');
+}
+
+function isAdmin(userId) {
+  return (process.env.ADMINS || '').split(',').includes(userId.toString());
+}
+
+async function canSendMessage(userId) {
+  try {
+    await bot.telegram.getChat(userId);
+    return true;
+  } catch (error) {
+    if (error.code === 403) {
+      await db.collection(COLLECTION_NAME).deleteOne({ telegram_id: userId });
+    }
+    return false;
   }
 }
 
 // Gestion des demandes d'adhésion
 bot.on('chat_join_request', async (ctx) => {
-  const { from: user, chat } = ctx.update.chat_join_request;
-
+  const { user, chat } = ctx.update.chat_join_request;
+  
   try {
-    // Sauvegarde dans MongoDB
-    const userData = {
-      telegram_id: user.id,
-      first_name: user.first_name,
-      username: user.username,
-      chat_id: chat.id,
-      joined_at: new Date(),
-      status: 'pending'
-    };
+    // Sauvegarde utilisateur
+    await db.collection(COLLECTION_NAME).updateOne(
+      { telegram_id: user.id },
+      { $set: {
+        first_name: user.first_name,
+        username: user.username,
+        status: 'pending',
+        last_activity: new Date()
+      }},
+      { upsert: true }
+    );
 
-    await saveUserToDB(userData);
-
-    // Envoi notification après 5s
-    setTimeout(() => sendWelcomeMessage(ctx, user), 5000);
-
+    // Envoi message de bienvenue après 5s
+    setTimeout(() => sendWelcomeMessage(user), 5000);
+    
     // Approbation finale après 10min
-    setTimeout(() => handleUserApproval(ctx, user, chat), 600000);
+    setTimeout(async () => {
+      const userData = await db.collection(COLLECTION_NAME).findOne({ telegram_id: user.id });
+      if (userData?.status === 'pending') {
+        await ctx.approveChatJoinRequest(user.id);
+        await db.collection(COLLECTION_NAME).updateOne(
+          { telegram_id: user.id },
+          { $set: { status: 'approved', approved_at: new Date() }}
+        );
+      }
+    }, 600000);
 
   } catch (error) {
-    console.error('Erreur traitement demande:', error);
+    console.error('❌ Erreur traitement demande:', error);
   }
 });
 
-// Fonctions MongoDB
-async function saveUserToDB(user) {
+// Envoi du message de bienvenue
+async function sendWelcomeMessage(user) {
   try {
-    const collection = db.collection(COLLECTION_NAME);
-    await collection.updateOne(
-      { telegram_id: user.telegram_id },
-      { $set: user },
-      { upsert: true }
-    );
-  } catch (error) {
-    console.error('Erreur sauvegarde DB:', error);
-  }
-}
+    const startParam = `start=user_${user.id}`;
+    const caption = `*${escapeMarkdown(user.first_name)}*, bienvenue !\n\n`
+      + "Cliquez sur le bouton ci-dessous pour confirmer votre adhésion :";
 
-async function handleUserApproval(ctx, user, chat) {
-  try {
-    const collection = db.collection(COLLECTION_NAME);
-    const userDoc = await collection.findOne({ telegram_id: user.id });
-
-    if (userDoc && userDoc.status === 'pending') {
-      await ctx.approveChatJoinRequest(user.id);
-      await collection.updateOne(
-        { telegram_id: user.id },
-        { $set: { status: 'approved', approved_at: new Date() } }
-      );
-      console.log(`Utilisateur approuvé: ${user.first_name}`);
-    }
-  } catch (error) {
-    console.error('Erreur approbation finale:', error);
-  }
-}
-
-// Envoi message de bienvenue
-async function sendWelcomeMessage(ctx, user) {
-  try {
-    const caption = `*${escapeMarkdown(user.first_name)}*, félicitations \\! Vous êtes sur le point de rejoindre un groupe d'élite réservé aux personnes ambitieuses et prêtes à réussir 💎
-
-⚠️ *Action Requise* : Confirmez votre présence en rejoignant nos canaux pour finaliser votre adhésion et accéder à notre communauté privée\\.
-⏳ Vous avez 10 minutes pour valider votre place exclusive dans le Club des Millionnaires\\.
-🚫 Après ce délai, votre demande sera annulée et votre place sera offerte à quelqu'un d'autre\\.`;
-
-    await ctx.telegram.sendVideo(user.id, VIDEO_URL, {
+    await bot.telegram.sendVideo(user.id, process.env.VIDEO_URL, {
       caption: caption,
       parse_mode: 'MarkdownV2',
-      reply_markup: generateButtons()
+      reply_markup: {
+        inline_keyboard: [[{
+          text: '✅ Confirmer mon adhésion',
+          url: `https://t.me/${bot.botInfo.username}?start=${startParam}`
+        }]]
+      }
     });
 
+    console.log(`📨 Message envoyé à ${user.id}`);
   } catch (error) {
+    console.error(`❌ Échec envoi à ${user.id}:`, error.message);
     if (error.code === 403) {
-      console.log(`L'utilisateur ${user.first_name} a bloqué le bot`);
-    } else {
-      console.error('Erreur envoi message:', error);
+      await db.collection(COLLECTION_NAME).deleteOne({ telegram_id: user.id });
     }
   }
-}
-
-// Génération des boutons
-function generateButtons() {
-  return {
-    inline_keyboard: [
-      [
-        { text: 'Canal Officiel 🌟', url: process.env.CHANNEL1_URL },
-        { text: 'Groupe VIP 💎', url: process.env.CHANNEL2_URL }
-      ],
-      [
-        { text: 'Canal 3 ✅', url: process.env.CHANNEL3_URL },
-        { text: 'Canal 4 📚', url: process.env.CHANNEL4_URL }
-      ],
-      [
-        { text: 'Notre Bot 🤖', url: process.env.BOT_URL },
-        { text: 'Canal crash💎 ', url: process.env.CHANNEL5_URL }
-      ]
-    ]
-  };
-}
-
-// Sécurité Markdown
-function escapeMarkdown(text) {
-  return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
-}
-
-// Fonction utilitaire pour faire une pause
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-// Démarrage
-async function start() {
-  await connectDB();
-  await bot.launch();
-  console.log('🤖 Bot démarré avec succès');
-}
-
-start();
-
-// Gestion des arrêts
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
-
-// Vérification des droits admin
-function isAdmin(userId) {
-  return ADMINS.includes(userId.toString());
 }
 
 // Commandes admin
-bot.command('admin', async (ctx) => {
+bot.command('stats', async (ctx) => {
   if (!isAdmin(ctx.from.id)) return;
 
-  try {
-    const collection = db.collection(COLLECTION_NAME);
-    const total = await collection.countDocuments();
-    const approved = await collection.countDocuments({ status: 'approved' });
-    const pending = await collection.countDocuments({ status: 'pending' });
+  const stats = await db.collection(COLLECTION_NAME).aggregate([
+    { $group: { 
+      _id: '$status',
+      count: { $sum: 1 },
+      latest: { $max: '$last_activity' }
+    }}
+  ]).toArray();
 
-    const stats = `📊 Statistiques du bot:
-👥 Total utilisateurs: ${total}
-✅ Approuvés: ${approved}
-⏳ En attente: ${pending}`;
-
-    await ctx.reply(stats);
-  } catch (error) {
-    console.error('Erreur stats admin:', error);
-    await ctx.reply('❌ Erreur lors de la récupération des statistiques');
-  }
+  let message = '📊 Statistiques :\n';
+  stats.forEach(s => {
+    message += `\n- ${s._id.toUpperCase()}: ${s.count} (dernière activité: ${s.latest.toLocaleString()})`;
+  });
+  
+  await ctx.reply(message);
 });
 
-// Commande count
-bot.command('count', async (ctx) => {
-  try {
-    const collection = db.collection(COLLECTION_NAME);
-    const count = await collection.countDocuments();
-    await ctx.reply(`👥 Nombre total d'utilisateurs: ${count}`);
-  } catch (error) {
-    console.error('Erreur count:', error);
-    await ctx.reply('❌ Erreur lors du comptage des utilisateurs');
-  }
-});
-
-// Gestion de l'envoi de messages optimisé par batch
 bot.command('send', async (ctx) => {
   if (!isAdmin(ctx.from.id)) return;
 
-  if (!ctx.message.reply_to_message) {
-    return ctx.reply('⚠️ Veuillez répondre à un message avec /send pour le diffuser');
-  }
-
   const message = ctx.message.reply_to_message;
+  if (!message) return ctx.reply('⚠️ Répondez à un message avec /send');
+
   const users = await db.collection(COLLECTION_NAME).find().toArray();
-  let success = 0, errors = 0;
-  const batchSize = 100; // Nombre d'envois par batch
+  let success = 0;
+  
+  await ctx.reply(`⏳ Début de la diffusion à ${users.length} utilisateurs...`);
 
-  await ctx.reply(`📤 Début de la diffusion à ${users.length} utilisateurs...`);
-
-  // Découpage de la liste en batch
-  for (let i = 0; i < users.length; i += batchSize) {
-    const batch = users.slice(i, i + batchSize);
-    // Envoi parallèle dans le batch courant
-    await Promise.all(batch.map(async (user) => {
+  for (const user of users) {
+    if (await canSendMessage(user.telegram_id)) {
       try {
-        await ctx.telegram.sendMessage(user.telegram_id, message.text || message.caption, {
-          parse_mode: 'MarkdownV2'
-        });
+        await bot.telegram.copyMessage(
+          user.telegram_id, 
+          ctx.chat.id, 
+          message.message_id,
+          { parse_mode: 'MarkdownV2' }
+        );
         success++;
+        await new Promise(resolve => setTimeout(resolve, 50)); // Anti-spam
       } catch (error) {
-        if (error.code === 403) {
-          await db.collection(COLLECTION_NAME).deleteOne({ telegram_id: user.telegram_id });
-        }
-        errors++;
+        console.error(`❌ Échec envoi à ${user.telegram_id}:`, error.message);
       }
-    }));
-    // Pause d'une seconde entre chaque batch
-    await sleep(1000);
+    }
   }
 
-  await ctx.reply(`✅ Diffusion terminée :
-📨 Envoyés avec succès: ${success}
-❌ Échecs: ${errors}`);
+  await ctx.reply(`✅ Diffusion terminée :\n${success} messages envoyés\n${users.length - success} échecs`);
 });
 
-const server = http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.write("I'm alive");
-    res.end();
+// Commande de test
+bot.command('test', async (ctx) => {
+  await ctx.replyWithVideo(process.env.VIDEO_URL, {
+    caption: 'Ceci est un message de test',
+    parse_mode: 'MarkdownV2'
+  });
+  ctx.reply('✅ Test réussi !');
 });
-server.listen(8080, () => { console.log("🌍 Server running on port 8080"); });
+
+// Démarrage
+(async () => {
+  await connectDB();
+  if (process.env.NODE_ENV !== 'production') {
+    bot.launch();
+  }
+  console.log('🤖 Bot prêt');
+})();
+
+// Gestion des arrêts
+process.on('SIGTERM', async () => {
+  await bot.stop();
+  server.close();
+  process.exit(0);
+});
