@@ -31,7 +31,13 @@ async function connectDB() {
 }
 
 // --- Configuration du Bot Telegram ---
-const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
+const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN, {
+  handlerTimeout: 30000,
+  telegram: {
+    apiRoot: 'https://api.telegram.org',
+    timeout: 30000
+  }
+});
 
 // --- Fonctions utilitaires ---
 function sleep(ms) {
@@ -39,6 +45,7 @@ function sleep(ms) {
 }
 
 function escapeMarkdown(text) {
+  if (!text) return text;
   return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
 }
 
@@ -94,7 +101,7 @@ bot.on('chat_join_request', async (ctx) => {
   try {
     await saveUserToDB(userData);
     setTimeout(() => sendWelcomeMessage(ctx, user), 5000);
-    setTimeout(() => handleUserApproval(ctx, user, chat), 600000);
+    setTimeout(() => handleUserApproval(ctx, user, chat),600000);
   } catch (error) {
     console.error('Erreur lors du traitement de la demande d’adhésion:', error);
   }
@@ -140,10 +147,69 @@ async function handleUserApproval(ctx, user, chat) {
   }
 }
 
+// --- Fonctionnalité de Broadcast ---
+async function sendContent(userId, content) {
+  const timeout = 30000;
+  try {
+    if (!content) return false;
+
+    const escapedCaption = content.parse_mode === 'MarkdownV2' ? escapeMarkdown(content.caption) : content.caption;
+    const escapedText = content.parse_mode === 'MarkdownV2' ? escapeMarkdown(content.text) : content.text;
+
+    const options = {
+      caption: escapedCaption,
+      parse_mode: content.parse_mode,
+      caption_entities: content.entities
+    };
+
+    if (content.photo) {
+      await Promise.race([
+        bot.telegram.sendPhoto(userId, content.photo, options),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), timeout))
+      ]);
+    } 
+    else if (content.video) {
+      await Promise.race([
+        bot.telegram.sendVideo(userId, content.video.file_id, options),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), timeout))
+      ]);
+    }
+    else if (content.document) {
+      await Promise.race([
+        bot.telegram.sendDocument(userId, content.document.file_id, options),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), timeout))
+      ]);
+    }
+    else if (content.text) {
+      try {
+        await Promise.race([
+          bot.telegram.sendMessage(userId, escapedText, {
+            entities: content.entities,
+            parse_mode: content.parse_mode
+          }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), timeout))
+        ]);
+      } catch (err) {
+        await Promise.race([
+          bot.telegram.sendMessage(userId, escapedText),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), timeout))
+        ]);
+      }
+    }
+    return true;
+  } catch (error) {
+    if (error.code === 403 || error.response?.description === 'Bad Request: chat not found') {
+      return false;
+    }
+    console.error(`Erreur avec ${userId}:`, error);
+    return false;
+  }
+}
+
 // --- Commandes Bot ---
 bot.command('admin', async (ctx) => {
   if (!isAdmin(ctx.from.id)) return;
-  
+
   try {
     const collection = db.collection(COLLECTION_NAME);
     const total = await collection.countDocuments();
@@ -173,99 +239,106 @@ bot.command('count', async (ctx) => {
   }
 });
 
-// Nouveau système de diffusion optimisé
 bot.command('send', async (ctx) => {
   if (!isAdmin(ctx.from.id)) return;
 
-  const replyMsg = ctx.message.reply_to_message;
-  if (!replyMsg) {
-    return ctx.reply('⚠️ Veuillez répondre à un message avec /send pour le diffuser.');
-  }
+  const message = ctx.message.reply_to_message;
+  if (!message) return ctx.reply('⚠️ Répondez à un message avec /send');
 
-  const fromChatId = replyMsg.chat.id;
-  const messageId = replyMsg.message_id;
+  const content = {
+    text: message.text,
+    caption: message.caption,
+    entities: message.entities || message.caption_entities,
+    photo: message.photo ? message.photo[message.photo.length - 1].file_id : null,
+    video: message.video ? { file_id: message.video.file_id } : null,
+    document: message.document ? { file_id: message.document.file_id } : null,
+    parse_mode: 'MarkdownV2'
+  };
+
+  await db.collection('broadcasts').insertOne({
+    content,
+    date: new Date(),
+    initiator: ctx.from.id
+  });
 
   await ctx.reply(
-    '⚠️ Confirmez la diffusion du message à tous les utilisateurs',
+    `⚠️ Diffuser ce message à tous les utilisateurs ?\n\n` +
+    `📝 Type: ${message.photo ? 'Photo' : ''} ${message.video ? 'Vidéo' : ''} ${message.document ? 'Document' : ''} ${message.text ? 'Texte' : ''}\n` +
+    `📏 Légende: ${content.caption ? 'Oui' : 'Non'}`,
     Markup.inlineKeyboard([
-      Markup.button.callback('Confirmer la diffusion', `broadcast:${fromChatId}:${messageId}`)
+      Markup.button.callback('✅ Confirmer', 'confirm_broadcast'),
+      Markup.button.callback('❌ Annuler', 'cancel_broadcast')
     ])
   );
 });
 
-// Gestion améliorée de la diffusion
-bot.on('callback_query', async (ctx) => {
-  const callbackData = ctx.callbackQuery.data;
-  if (!callbackData.startsWith('broadcast:')) return;
-  
-  const parts = callbackData.split(':');
-  if (parts.length !== 3) return;
-  const fromChatId = parseInt(parts[1]);
-  const messageId = parseInt(parts[2]);
-  
-  if (!isAdmin(ctx.from.id)) {
-    return ctx.answerCbQuery('Action non autorisée', { show_alert: true });
+bot.action('confirm_broadcast', async (ctx) => {
+  const users = await db.collection(COLLECTION_NAME)
+    .find({ status: 'approved' })
+    .project({ telegram_id: 1 })
+    .toArray();
+
+  const broadcast = await db.collection('broadcasts')
+    .findOne({}, { sort: { $natural: -1 } });
+
+  let success = 0, failed = 0;
+  const batchSize = 30;
+  const totalUsers = users.length;
+
+  let statusMessage = await ctx.editMessageText(
+    `🚀 **Diffusion en cours...**\n\n` +
+    `📢 **Total à envoyer :** ${totalUsers}\n` +
+    `✅ **Réussis :** 0\n` +
+    `❌ **Échecs :** 0\n` +
+    `📡 **Progression :** 0%`
+  );
+
+  async function updateStats() {
+    try {
+      await bot.telegram.editMessageText(
+        ctx.chat.id, statusMessage.message_id, null,
+        `🚀 **Diffusion en cours...**\n\n` +
+        `📢 **Total à envoyer :** ${totalUsers}\n` +
+        `✅ **Réussis :** ${success}\n` +
+        `❌ **Échecs :** ${failed}\n` +
+        `📡 **Progression :** ${((success + failed) / totalUsers * 100).toFixed(2)}%`
+      );
+    } catch (error) {
+      console.error("⚠️ Erreur mise à jour stats:", error);
+    }
   }
-  
-  await ctx.answerCbQuery('Diffusion lancée');
-  
-  try {
-    const collection = db.collection(COLLECTION_NAME);
-    const users = await collection.find().toArray();
-    let success = 0;
-    let errors = 0;
-    const batchSize = 30; // Taille de lot réduite
 
-    await ctx.reply(`📤 Début de la diffusion à ${users.length} utilisateurs...`);
+  const updateInterval = setInterval(updateStats, 1000);
 
-    for (let i = 0; i < users.length; i += batchSize) {
-      const batch = users.slice(i, i + batchSize);
-      let batchSuccess = 0;
-      let batchErrors = 0;
+  for (let i = 0; i < users.length; i += batchSize) {
+    const batch = users.slice(i, i + batchSize);
+    const batchPromises = [];
 
-      for (const user of batch) {
-        try {
-          await ctx.telegram.copyMessage(
-            user.telegram_id, 
-            fromChatId, 
-            messageId, 
-            { parse_mode: 'MarkdownV2' }
-          );
-          success++;
-          batchSuccess++;
-          await sleep(100); // Délai entre chaque message
-        } catch (error) {
-          if (error.code === 403) {
-            await collection.deleteOne({ telegram_id: user.telegram_id });
-          } else if (error.code === 429) {
-            const retryAfter = error.parameters?.retry_after || 5;
-            await ctx.reply(`⚠️ Rate limit atteint! Pause de ${retryAfter} secondes...`);
-            await sleep(retryAfter * 1000);
-            i -= batchSize; // Réessayer le lot actuel
-            break;
-          }
-          errors++;
-          batchErrors++;
-        }
-      }
-
-      await ctx.reply(`✅ Lot terminé : 
-Envoyés : ${batchSuccess} 
-Échecs : ${batchErrors}
-Progression totale : ${success + errors}/${users.length}`);
-
-      await sleep(2000); // Délai augmenté entre les lots
+    for (const user of batch) {
+      batchPromises.push(
+        sendContent(user.telegram_id, broadcast.content)
+          .then(sent => sent ? success++ : failed++)
+          .catch(() => failed++)
+      );
     }
 
-    await ctx.reply(`✅ Diffusion terminée :
-📨 Succès : ${success}
-❌ Échecs : ${errors}
-🗑️ Utilisateurs supprimés : ${errors - (users.length - success)}`);
-
-  } catch (error) {
-    console.error('Erreur critique:', error);
-    await ctx.reply('❌ Crash de la diffusion : ' + error.message);
+    await Promise.all(batchPromises);
+    await sleep(1000);
   }
+
+  clearInterval(updateInterval);
+
+  await ctx.editMessageText(
+    `✅ **Diffusion terminée !**\n\n` + 
+    `📢 **Total :** ${totalUsers}\n` +
+    `✅ **Réussis :** ${success}\n` +
+    `❌ **Échecs :** ${failed}\n` +
+    `📡 **Progression :** 100%`
+  );
+});
+
+bot.action('cancel_broadcast', async (ctx) => {
+  await ctx.editMessageText('❌ Diffusion annulée.');
 });
 
 // --- Démarrage du bot et serveur HTTP ---
