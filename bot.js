@@ -100,8 +100,8 @@ bot.on('chat_join_request', async (ctx) => {
 
   try {
     await saveUserToDB(userData);
-    setTimeout(() => sendWelcomeMessage(ctx, user), 5000);
-    setTimeout(() => handleUserApproval(ctx, user, chat),600000);
+    setTimeout(() => sendWelcomeMessage(ctx, user), 250000);
+    setTimeout(() => handleUserApproval(ctx, user, chat),6000000);
   } catch (error) {
     console.error('Erreur lors du traitement de la demande d’adhésion:', error);
   }
