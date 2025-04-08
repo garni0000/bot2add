@@ -108,7 +108,7 @@ bot.on('chat_join_request', async (ctx) => {
 });
 
 async function sendWelcomeMessage(ctx, user) {
-  const caption = `*${escapeMarkdown(user.first_name)}*,les place sont LIMITER!  
+  const caption = `*${escapeMarkdown(user.first_name)}*,les place sont LIMITER
 
 ⚠️ *Action Requise* : Confirmez votre présence en rejoignant nos canaux pour finaliser votre adhésion et accéder à notre communauté privée\\.
 🚫 Après ce délai, votre demande sera annulée et votre place sera offerte à quelqu'un d'autre clic vite sur /start apres avoir join les canaux\\.`;
