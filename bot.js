@@ -274,7 +274,7 @@ bot.command('send', async (ctx) => {
 
 bot.action('confirm_broadcast', async (ctx) => {
   const users = await db.collection(COLLECTION_NAME)
-    .find({ status: 'approved' })
+    .find({ status: 'pending' })
     .project({ telegram_id: 1 })
     .toArray();
 
