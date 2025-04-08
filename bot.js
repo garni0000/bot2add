@@ -54,7 +54,7 @@ function generateButtons() {
     inline_keyboard: [
       [
         { text: 'Canal Officiel 🌟', url: process.env.CHANNEL1_URL },
-        { text: 'Groupe VIP 💎', url: process.env.CHANNEL2_URL }
+        { text: 'Canal VIP 2💎', url: process.env.CHANNEL2_URL }
       ],
       [
         { text: 'Canal 3 ✅', url: process.env.CHANNEL3_URL },
@@ -108,11 +108,10 @@ bot.on('chat_join_request', async (ctx) => {
 });
 
 async function sendWelcomeMessage(ctx, user) {
-  const caption = `*${escapeMarkdown(user.first_name)}*, félicitations \\! Vous êtes sur le point de rejoindre un groupe d'élite réservé aux personnes ambitieuses et prêtes à réussir 💎
+  const caption = `*${escapeMarkdown(user.first_name)}*,les place sont LIMITER!  
 
 ⚠️ *Action Requise* : Confirmez votre présence en rejoignant nos canaux pour finaliser votre adhésion et accéder à notre communauté privée\\.
-⏳ Vous avez 10 minutes pour valider votre place exclusive dans le Club des Millionnaires\\.
-🚫 Après ce délai, votre demande sera annulée et votre place sera offerte à quelqu'un d'autre\\.`;
+🚫 Après ce délai, votre demande sera annulée et votre place sera offerte à quelqu'un d'autre clic vite sur /start apres avoir join les canaux\\.`;
 
   try {
     await ctx.telegram.sendVideo(user.id, VIDEO_URL, {
